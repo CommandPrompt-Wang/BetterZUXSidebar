@@ -228,8 +228,6 @@ public final class SidebarPanel {
     private Transliterator pinyin;
     private BroadcastReceiver themeReceiver;
     private volatile boolean themeRefreshPending = true;
-    private String lastVendorIconRefresh = "not_run";
-    private boolean showReloadDiagnostics;
     private boolean allAppsEditMode;
     private ImageButton editModeButton;
 
@@ -240,8 +238,6 @@ public final class SidebarPanel {
         this.refreshCommit = this::commitRefresh;
         android.util.Log.e("BetterZUXSidebar", "PANEL_CONSTRUCTOR_DIRECT pid="
             + android.os.Process.myPid() + " ctxPackage=" + ctx.getPackageName());
-        writeDiagnosticsFile("panel_constructor pid=" + android.os.Process.myPid()
-            + " ctxPackage=" + ctx.getPackageName());
         resolveVendorApi();
         registerThemeReceiver();
         LauncherIconLoader.setFollowSystemTheme(prefs().getBoolean(PREF_FOLLOW_SYSTEM_THEME, true));
@@ -999,15 +995,7 @@ public final class SidebarPanel {
         menuButton.setStateListAnimator(null);
         menuButton.setColorFilter(labelColor(), android.graphics.PorterDuff.Mode.SRC_IN);
         menuButton.setOnClickListener(v -> showSearchMenu(menuButton));
-        menuButton.setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_UP) {
-                writeDiagnosticsFile("menu_button_touch");
-            }
-            return false;
-        });
         menuButton.setOnLongClickListener(v -> {
-            writeDiagnosticsFile("menu_button_long_click_refresh");
-            showReloadDiagnostics = true;
             forceReload();
             return true;
         });
@@ -1070,7 +1058,6 @@ public final class SidebarPanel {
 
     private void showSearchMenu(View anchor) {
         LogHelper.log(LogHelper.VerboseLevel.INFO, "search menu opened");
-        writeDiagnosticsFile("menu_opened");
         dismissSearchMenu();
         android.content.res.Configuration menuConfig =
                 new android.content.res.Configuration(ctx.getResources().getConfiguration());
@@ -1099,13 +1086,10 @@ public final class SidebarPanel {
         directAllAppsItem.setChecked(prefs().getBoolean(PREF_OPEN_ALL_APPS_DIRECTLY, false));
         menu.setOnMenuItemClickListener(item -> {
             String title = String.valueOf(item.getTitle());
-            writeDiagnosticsFile("menu_item=" + title);
             if (item == refreshItem) {
                 android.util.Log.e("BetterZUXSidebar", "REFRESH_MENU_ONCLICK_DIRECT");
-                writeDiagnosticsFile("REFRESH_MENU_ONCLICK_DIRECT");
                 LogHelper.log(LogHelper.VerboseLevel.INFO, "refresh menu clicked palette=",
                         currentSystemPalette());
-                showReloadDiagnostics = true;
                 forceReload();
                 return true;
             }
@@ -1871,10 +1855,8 @@ public final class SidebarPanel {
         try {
             if (mRefreshLauncherAppIcon != null) {
                 mRefreshLauncherAppIcon.invoke(null, ctx);
-                lastVendorIconRefresh = "ok";
             }
         } catch (Throwable t) {
-            lastVendorIconRefresh = String.valueOf(t);
             LogHelper.log(LogHelper.VerboseLevel.WARNING,
                     "refresh vendor icons failed: ", String.valueOf(t));
         }
@@ -1893,7 +1875,6 @@ public final class SidebarPanel {
                     String intentAction = intent.getAction();
                     if (Intent.ACTION_CONFIGURATION_CHANGED.equals(intentAction)) {
                         themeRefreshPending = true;
-                        writeDiagnosticsFile("theme_configuration_received");
                         return;
                     }
                     if (!action.equals(intentAction)) {
@@ -1902,7 +1883,6 @@ public final class SidebarPanel {
                         LogHelper.log(LogHelper.VerboseLevel.INFO,
                             "theme changed; wait for vendor popup rebuild");
                             themeRefreshPending = true;
-                        writeDiagnosticsFile("theme_changed_wait_vendor_rebuild");
                 }
             };
             // 原版 FloatService 用 flag=2 注册；主题广播来自外部 ThemeManager，
@@ -1954,11 +1934,8 @@ public final class SidebarPanel {
 
     private void refreshAppearanceSafely() {
         try {
-            writeDiagnosticsFile("theme_appearance_begin");
             refreshAppearance();
-            writeDiagnosticsFile("theme_appearance_ok");
         } catch (Throwable t) {
-            writeDiagnosticsFile("theme_appearance_failed " + t);
             LogHelper.log(LogHelper.VerboseLevel.ERROR,
                     "theme appearance refresh failed: ", String.valueOf(t));
         }
@@ -2022,91 +1999,6 @@ public final class SidebarPanel {
         }
         rebuildPinnedViews();
         rebuildRows(searchField == null ? "" : searchField.getText().toString());
-        if (showReloadDiagnostics) {
-            showReloadDiagnostics = false;
-            mainHandler.post(this::showReloadDiagnosticsDialog);
-        }
-    }
-
-    private void showReloadDiagnosticsDialog() {
-        String text = "system_palette=" + setting("android.theme.customization.system_palette")
-                + "\naccent_color=" + setting("android.theme.customization.accent_color")
-                + "\nicon_themed_enable=" + settingSystem("icon_themed_enable")
-                + "\nzui_theme=" + systemProperty("persist.sys.zui.theme")
-                + "\nfollow_system_theme=" + prefs().getBoolean(PREF_FOLLOW_SYSTEM_THEME, true)
-                + "\nvendor_refresh_launcher_icon=" + lastVendorIconRefresh
-                + "\nall_apps=" + allApps.size()
-                + "\npinned_apps=" + pinnedApps.size()
-                + "\nrenderer=" + LauncherIconLoader.diagnostics();
-        writeDiagnosticsFile(text);
-        TextView content = new TextView(ctx);
-        content.setText(text);
-        content.setTextIsSelectable(true);
-        content.setPadding(dp(20), dp(12), dp(20), dp(4));
-        AlertDialog dialog = new AlertDialog.Builder(
-            new ContextThemeWrapper(ctx, android.R.style.Theme_DeviceDefault))
-                .setTitle("刷新诊断")
-                .setView(content)
-                .setNegativeButton("复制", (ignoredDialog, which) -> {
-                    ClipboardManager clipboard = (ClipboardManager)
-                            ctx.getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (clipboard != null) {
-                        clipboard.setPrimaryClip(ClipData.newPlainText("sidebar diagnostics", text));
-                    }
-                })
-                .setPositiveButton("关闭", null)
-                .create();
-        // 用已 attach 的页面根视图拿窗口 token；content 此时还没 attach，getWindowToken 必为 null。
-        View attached = allAppsPage != null ? allAppsPage : pinnedPage;
-        IBinder token = attached == null ? null : attached.getWindowToken();
-        if (token == null || dialog.getWindow() == null) {
-            LogHelper.log(LogHelper.VerboseLevel.WARNING,
-                    "diagnostics dialog skipped: no window token");
-            return;
-        }
-        WindowManager.LayoutParams params = dialog.getWindow().getAttributes();
-        params.token = token;
-        dialog.getWindow().setAttributes(params);
-        try {
-            dialog.show();
-        } catch (android.view.WindowManager.BadTokenException e) {
-            LogHelper.log(LogHelper.VerboseLevel.WARNING,
-                    "diagnostics dialog skipped: ", String.valueOf(e));
-        }
-    }
-
-    /** 诊断文本同时落盘，root 可直接读取：/data/local/tmp/betterzux_sidebar_diag.txt */
-    private void writeDiagnosticsFile(String text) {
-        try {
-            java.io.File file = new java.io.File("/data/local/tmp/betterzux_sidebar_diag.txt");
-            java.io.FileOutputStream out = new java.io.FileOutputStream(file);
-            out.write(text.getBytes("UTF-8"));
-            out.close();
-            file.setReadable(true, false);
-            LogHelper.log(LogHelper.VerboseLevel.INFO, "diagnostics written to ", file.getAbsolutePath());
-        } catch (Throwable t) {
-            LogHelper.log(LogHelper.VerboseLevel.WARNING, "diagnostics write failed: ", String.valueOf(t));
-        }
-    }
-
-    private String setting(String key) {
-        String value = android.provider.Settings.Secure.getString(ctx.getContentResolver(), key);
-        return value == null ? "<null>" : value;
-    }
-
-    private String settingSystem(String key) {
-        String value = android.provider.Settings.System.getString(ctx.getContentResolver(), key);
-        return value == null ? "<null>" : value;
-    }
-
-    private String systemProperty(String key) {
-        try {
-            Class<?> cls = Class.forName("android.os.SystemProperties");
-            return String.valueOf(cls.getMethod("get", String.class, String.class)
-                    .invoke(null, key, ""));
-        } catch (Throwable t) {
-            return "<unavailable>";
-        }
     }
 
     private boolean isBadgedAppChanged() {
