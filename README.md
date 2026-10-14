@@ -50,8 +50,8 @@ su -c "pidof com.android.systemui" | tr -dc '0-9\n' | awk 'NF==1 {print $1}' | w
 模块没有独立的入口页面，所有配置都在注入后的侧边栏编辑：
 
 <div style="display:flex; gap:8px;">
-  <img src="assets/screenshot_p1.png" style="height:400px; width:auto;">
-  <img src="assets/screenshot.jpg" style="height:400px; width:auto;">
+  <img src="assets/screenshot_p1.jpg" style="height:400px; width:auto;">
+  <img src="assets/screenshot.png" style="height:400px; width:auto;">
 </div>
 
 模块对第二页（所有程序）的界面改动较大，而基本保持了第一页（快捷栏）的功能。
